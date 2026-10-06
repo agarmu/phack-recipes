@@ -1,0 +1,22 @@
+[Unit]
+Description=Loki telemetry container
+
+[Container]
+Image=docker.io/grafana/loki:3.7.8
+ContainerName=loki
+Network=telemetry.network
+NetworkAlias=loki
+Volume=loki-data.volume:/loki:U
+Volume=./config/loki:/etc/loki:ro,Z
+Exec=-config.file=/etc/loki/config.yaml
+NoNewPrivileges=true
+LogDriver=journald
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=900
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

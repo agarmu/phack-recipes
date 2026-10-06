@@ -1,0 +1,25 @@
+[Unit]
+Description=Telemetry Unix-socket gateway
+Requires=loki.container grafana.container
+After=loki.container grafana.container
+
+[Container]
+Image=docker.io/library/caddy:2.11.4-alpine
+ContainerName=telemetry-gateway
+Network=telemetry.network
+NetworkAlias=telemetry-gateway
+Volume=./config/telemetry-gateway/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+Volume=%t/host-sockets:/run/host-sockets
+Secret=telemetry-loki-otel-password-hash,type=env,target=LOKI_OTEL_PASSWORD_HASH
+Secret=telemetry-loki-admin-password-hash,type=env,target=LOKI_ADMIN_PASSWORD_HASH
+NoNewPrivileges=true
+LogDriver=journald
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=900
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

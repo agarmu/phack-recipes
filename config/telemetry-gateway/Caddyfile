@@ -1,0 +1,34 @@
+{
+    admin off
+    auto_https off
+}
+
+:3000 {
+    bind unix//run/host-sockets/grafana.sock|0660
+    reverse_proxy grafana:3000
+}
+
+:3100 {
+    bind unix//run/host-sockets/loki-ingest.sock|0660
+    basic_auth {
+        otel {env.LOKI_OTEL_PASSWORD_HASH}
+    }
+    @ingest {
+        method POST
+        path /otlp/v1/logs
+    }
+    handle @ingest {
+        reverse_proxy loki:3100
+    }
+    handle {
+        respond "Not found" 404
+    }
+}
+
+:3101 {
+    bind unix//run/host-sockets/loki-admin.sock|0660
+    basic_auth {
+        admin {env.LOKI_ADMIN_PASSWORD_HASH}
+    }
+    reverse_proxy loki:3100
+}
