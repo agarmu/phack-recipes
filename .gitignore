@@ -1,0 +1,6 @@
+__pycache__/
+.ansible/
+group_vars/podman_hosts/vault.yml
+inventory/group_vars/podman_hosts/vault.yml
+host_vars/localhost/vault.yml
+/secrets.yml

@@ -1,0 +1,121 @@
+---
+- name: Configure monitoring
+  when: monitoring_enabled
+  module_defaults:
+    containers.podman.podman_container: "{{ setup_podman_container_defaults }}"
+  block:
+    - name: Require the Grafana credential from secrets.yml
+      ansible.builtin.assert:
+        that:
+          - monitoring_grafana_admin_password is string
+          - monitoring_grafana_admin_password | length > 0
+          - "'\n' not in monitoring_grafana_admin_password"
+          - "'\r' not in monitoring_grafana_admin_password"
+          - "'\u0000' not in monitoring_grafana_admin_password"
+        quiet: true
+      no_log: true
+
+    - name: Create the monitoring configuration directory
+      ansible.builtin.file:
+        path: "{{ monitoring_data_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Preserve the monitoring data volumes
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - grafana-data
+        - loki-data
+
+    - name: Generate Loki configuration
+      ansible.builtin.copy:
+        content: "{{ monitoring_loki_config | to_nice_yaml(indent=2, sort_keys=false) }}"
+        dest: "{{ monitoring_data_dir }}/loki.yaml"
+        mode: "0644"
+      notify: Restart Loki
+
+    - name: Generate Grafana provisioning
+      ansible.builtin.copy:
+        content: "{{ item.config | to_nice_yaml(indent=2, sort_keys=false) }}"
+        dest: "{{ monitoring_data_dir }}/{{ item.name }}.yaml"
+        mode: "0644"
+      loop:
+        - name: grafana-datasources
+          config: "{{ monitoring_grafana_datasources }}"
+        - name: grafana-plugins
+          config: "{{ monitoring_grafana_plugins }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Restart Grafana
+
+    - name: Write the private Grafana environment
+      ansible.builtin.copy:
+        content: "GF_SECURITY_ADMIN_PASSWORD={{ monitoring_grafana_admin_password }}\n"
+        dest: "{{ monitoring_data_dir }}/grafana.env"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify: Restart Grafana
+
+    - name: Define Loki
+      containers.podman.podman_container:
+        name: loki
+        image: "{{ monitoring_loki_image }}"
+        command:
+          - -config.file=/etc/loki/config.yaml
+        volume:
+          - loki-data:/loki:U
+          - "{{ monitoring_data_dir }}/loki.yaml:/etc/loki/config.yaml:ro,Z"
+      notify:
+        - Reload user systemd
+        - Restart Loki
+
+    - name: Define Grafana
+      containers.podman.podman_container:
+        name: grafana
+        image: "{{ monitoring_grafana_image }}"
+        env:
+          GF_LOG_MODE: console
+          GF_USERS_ALLOW_SIGN_UP: "false"
+          GF_AUTH_ANONYMOUS_ENABLED: "false"
+          GF_ANALYTICS_REPORTING_ENABLED: "false"
+          GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+          GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+          GF_PLUGINS_PREINSTALL_SYNC: grafana-lokioperational-app@2.0.0
+        env_file:
+          - "{{ monitoring_data_dir }}/grafana.env"
+        volume:
+          - grafana-data:/var/lib/grafana:U
+          - "{{ monitoring_data_dir }}/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/loki.yaml:ro,Z"
+          - "{{ monitoring_data_dir }}/grafana-plugins.yaml:/etc/grafana/provisioning/plugins/loki.yaml:ro,Z"
+      notify:
+        - Reload user systemd
+        - Restart Grafana
+
+    - name: Apply monitoring changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Start monitoring services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}.service"
+        scope: user
+        state: started
+      loop:
+        - loki
+        - grafana
+      when: not ansible_check_mode
+
+- name: Disable monitoring
+  ansible.builtin.include_role:
+    name: setup_podman
+    tasks_from: remove_container
+  vars:
+    setup_podman_container_name: "{{ monitoring_container }}"
+  loop:
+    - grafana
+    - loki
+  loop_control:
+    loop_var: monitoring_container
+  when: not monitoring_enabled

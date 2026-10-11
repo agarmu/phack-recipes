@@ -1,0 +1,131 @@
+---
+- name: Configure the shared proxy
+  when: caddy_enabled
+  module_defaults:
+    containers.podman.podman_container: "{{ setup_podman_container_defaults }}"
+  block:
+    - name: Require Loki password hashes from secrets.yml
+      ansible.builtin.assert:
+        that:
+          - caddy_private_environment.LOKI_OTEL_PASSWORD_HASH | length > 0
+          - caddy_private_environment.LOKI_ADMIN_PASSWORD_HASH | length > 0
+        quiet: true
+      no_log: true
+      when: monitoring_enabled
+
+    - name: Require single-line proxy environment values
+      ansible.builtin.assert:
+        that:
+          - item.key is match('^[A-Z_][A-Z0-9_]*$')
+          - item.value is string
+          - "'\n' not in item.value"
+          - "'\r' not in item.value"
+          - "'\u0000' not in item.value"
+        quiet: true
+      loop: "{{ caddy_private_environment | dict2items }}"
+      no_log: true
+
+    - name: Create the Caddy configuration directory
+      ansible.builtin.file:
+        path: "{{ caddy_data_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Create the host proxy socket directory
+      ansible.builtin.file:
+        path: "{{ caddy_socket_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Install filesystem ACL tools for host proxy access
+      become: true
+      ansible.builtin.package:
+        name: acl
+        state: present
+
+    - name: Grant the host proxy traversal to the socket directory
+      become: true
+      ansible.posix.acl:
+        path: "/{{ caddy_socket_dir.split('/')[1:item] | join('/') }}"
+        entity: "{{ caddy_host_proxy_user }}"
+        etype: user
+        permissions: x
+        state: present
+      loop: "{{ range(2, caddy_socket_dir.split('/') | length + 1) | list }}"
+
+    - name: Grant the host proxy access to newly created sockets
+      become: true
+      ansible.posix.acl:
+        path: "{{ caddy_socket_dir }}"
+        entity: "{{ caddy_host_proxy_user }}"
+        etype: user
+        permissions: rw
+        default: true
+        state: present
+
+    - name: Find existing proxy sockets
+      ansible.builtin.find:
+        paths: "{{ caddy_socket_dir }}"
+        patterns:
+          - grafana.sock
+          - loki-ingest.sock
+          - loki-admin.sock
+        file_type: any
+      register: caddy_existing_sockets
+
+    - name: Grant the host proxy access to existing sockets
+      become: true
+      ansible.posix.acl:
+        path: "{{ item.path }}"
+        entity: "{{ caddy_host_proxy_user }}"
+        etype: user
+        permissions: rw
+        state: present
+      loop: "{{ caddy_existing_sockets.files }}"
+
+    - name: Write the private proxy environment
+      ansible.builtin.template:
+        src: environment.j2
+        dest: "{{ caddy_data_dir }}/caddy.env"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify: Restart Caddy
+
+    - name: Render the unified Caddy configuration
+      ansible.builtin.template:
+        src: Caddyfile.j2
+        dest: "{{ caddy_data_dir }}/Caddyfile"
+        mode: "0644"
+      notify: Restart Caddy
+
+    - name: Define Caddy
+      containers.podman.podman_container:
+        name: caddy
+        image: "{{ caddy_image }}"
+        env_file:
+          - "{{ caddy_data_dir }}/caddy.env"
+        volume:
+          - "{{ caddy_data_dir }}/Caddyfile:/etc/caddy/Caddyfile:ro,Z"
+          - "{{ caddy_socket_dir }}:/sockets:z"
+      notify:
+        - Reload user systemd
+        - Restart Caddy
+
+    - name: Apply proxy changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Start Caddy
+      ansible.builtin.systemd_service:
+        name: caddy.service
+        scope: user
+        state: started
+      when: not ansible_check_mode
+
+- name: Disable Caddy
+  ansible.builtin.include_role:
+    name: setup_podman
+    tasks_from: remove_container
+  vars:
+    setup_podman_container_name: caddy
+  when: not caddy_enabled

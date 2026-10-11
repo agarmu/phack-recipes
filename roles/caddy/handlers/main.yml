@@ -1,0 +1,8 @@
+---
+- name: Restart Caddy
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    scope: user
+    state: restarted
+  environment: "{{ setup_podman_environment }}"
+  when: caddy_enabled and not ansible_check_mode

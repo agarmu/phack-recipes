@@ -1,0 +1,4 @@
+---
+# Deployment switches; all other settings default in roles/*/defaults/main.yml.
+monitoring_enabled: true
+caddy_enabled: true

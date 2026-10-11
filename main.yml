@@ -1,0 +1,33 @@
+---
+- name: Configure local services
+  hosts: localhost
+  connection: local
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  vars_files:
+    - config.yml
+
+  pre_tasks:
+    - name: Load private settings when present
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/secrets.yml"
+      when: lookup('ansible.builtin.fileglob', playbook_dir ~ '/secrets.yml') | length > 0
+      no_log: true
+      tags:
+        - always
+
+  roles:
+    - role: setup_podman
+      tags:
+        - always
+    - role: monitoring
+      environment: "{{ setup_podman_environment }}"
+      tags:
+        - monitoring
+    - role: caddy
+      environment: "{{ setup_podman_environment }}"
+      tags:
+        - caddy
+        # Refresh proxy routes when a backend is enabled or disabled.
+        - monitoring

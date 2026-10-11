@@ -1,0 +1,7 @@
+---
+- name: Reload user systemd
+  ansible.builtin.systemd_service:
+    scope: user
+    daemon_reload: true
+  environment: "{{ setup_podman_environment }}"
+  when: not ansible_check_mode

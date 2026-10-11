@@ -1,0 +1,29 @@
+---
+- name: Check for the managed Quadlet
+  ansible.builtin.stat:
+    path: "{{ setup_podman_quadlet_dir }}/{{ setup_podman_container_name }}.container"
+  register: setup_podman_unit
+
+- name: Stop the managed service before removing its definition
+  ansible.builtin.systemd_service:
+    name: "{{ setup_podman_container_name }}.service"
+    scope: user
+    state: stopped
+    daemon_reload: true
+  environment: "{{ setup_podman_environment }}"
+  when:
+    - setup_podman_unit.stat.exists
+    - not ansible_check_mode
+
+- name: Remove the Quadlet so the service stays disabled after reboot
+  ansible.builtin.file:
+    path: "{{ setup_podman_quadlet_dir }}/{{ setup_podman_container_name }}.container"
+    state: absent
+  notify: Reload user systemd
+
+- name: Remove the disabled container and preserve its data volumes
+  containers.podman.podman_container:
+    name: "{{ setup_podman_container_name }}"
+    state: absent
+    delete_volumes: false
+  environment: "{{ setup_podman_environment }}"

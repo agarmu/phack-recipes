@@ -1,0 +1,10 @@
+---
+caddy_enabled: true
+caddy_data_dir: "{{ setup_podman_data_dir }}/caddy"
+caddy_image: docker.io/library/caddy:2.11.4-alpine
+caddy_socket_dir: "{{ caddy_data_dir }}/sockets"
+caddy_socket_mode: "0660"
+# Existing OS account running the external HTTPS proxy.
+# The role grants traversal only on parents and read/write access only to sockets.
+caddy_host_proxy_user: caddy
+caddy_private_environment: "{{ secret_caddy_environment | default({}) }}"

@@ -1,0 +1,83 @@
+---
+monitoring_enabled: true
+monitoring_data_dir: "{{ setup_podman_data_dir }}/monitoring"
+monitoring_grafana_image: docker.io/grafana/grafana:13.2.3
+monitoring_loki_image: docker.io/grafana/loki:3.7.8
+monitoring_grafana_admin_password: "{{ secret_grafana_admin_password | default('') }}"
+
+monitoring_grafana_datasources:
+  apiVersion: 1
+  datasources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      isDefault: true
+      editable: false
+      jsonData:
+        maxLines: 1000
+
+monitoring_grafana_plugins:
+  apiVersion: 1
+  apps:
+    - type: grafana-lokioperational-app
+      org_id: 1
+      disabled: false
+
+monitoring_loki_config:
+  auth_enabled: false
+  server:
+    http_listen_address: 0.0.0.0
+    http_listen_port: 3100
+    grpc_listen_address: 127.0.0.1
+    grpc_listen_port: 9096
+  common:
+    path_prefix: /loki
+    replication_factor: 1
+    ring:
+      instance_addr: 127.0.0.1
+      kvstore:
+        store: inmemory
+  schema_config:
+    configs:
+      - from: '2020-01-01'
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  storage_config:
+    tsdb_shipper:
+      active_index_directory: /loki/index
+      cache_location: /loki/index-cache
+    filesystem:
+      directory: /loki/chunks
+  ingester:
+    wal:
+      dir: /loki/wal
+  compactor:
+    working_directory: /loki/compactor
+    retention_enabled: true
+    delete_request_store: filesystem
+  limits_config:
+    allow_structured_metadata: true
+    retention_period: 720h
+    otlp_config:
+      resource_attributes:
+        ignore_defaults: true
+        attributes_config:
+          - action: index_label
+            attributes:
+              - service.name
+              - deployment.environment.name
+              - deployment.environment
+  analytics:
+    reporting_enabled: false
+  ui:
+    enabled: true
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1

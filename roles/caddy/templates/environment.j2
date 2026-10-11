@@ -1,0 +1,3 @@
+{% for key, value in caddy_private_environment | dictsort %}
+{{ key }}={{ value }}
+{% endfor %}

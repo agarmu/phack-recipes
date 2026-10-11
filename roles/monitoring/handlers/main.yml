@@ -1,0 +1,16 @@
+---
+- name: Restart Loki
+  ansible.builtin.systemd_service:
+    name: loki.service
+    scope: user
+    state: restarted
+  environment: "{{ setup_podman_environment }}"
+  when: monitoring_enabled and not ansible_check_mode
+
+- name: Restart Grafana
+  ansible.builtin.systemd_service:
+    name: grafana.service
+    scope: user
+    state: restarted
+  environment: "{{ setup_podman_environment }}"
+  when: monitoring_enabled and not ansible_check_mode

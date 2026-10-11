@@ -1,0 +1,134 @@
+---
+- name: Require a non-root account on the Linux container host
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.system == 'Linux'
+      - ansible_facts.user_uid != 0
+      - ansible_facts.service_mgr == 'systemd'
+    fail_msg: >-
+      Run this playbook on the Linux container host as its ordinary Podman user.
+      With Podman on macOS or Windows, run it inside the Linux VM; Quadlet requires systemd.
+
+- name: Check for an existing Podman installation
+  ansible.builtin.command:
+    argv:
+      - podman
+      - --version
+  register: setup_podman_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install Podman when missing
+  become: true
+  when: setup_podman_installed.rc != 0
+  block:
+    - name: Refresh the Debian package index
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts.pkg_mgr == 'apt'
+
+    - name: Install Podman and rootless dependencies from the distribution
+      ansible.builtin.package:
+        name: "{{ setup_podman_packages }}"
+        state: present
+
+- name: Defer runtime configuration until Podman is installed in check mode
+  ansible.builtin.meta: end_host
+  when:
+    - ansible_check_mode
+    - setup_podman_installed.rc != 0
+
+- name: Check whether the user already has lingering enabled
+  ansible.builtin.command:
+    argv:
+      - loginctl
+      - show-user
+      - "{{ ansible_facts.user_uid | string }}"
+      - --property=Linger
+      - --value
+  register: setup_podman_linger
+  changed_when: false
+  check_mode: false
+  failed_when: setup_podman_linger.rc not in [0, 1]
+
+- name: Keep the user service manager running across logouts and reboots
+  become: true
+  ansible.builtin.command:
+    argv:
+      - loginctl
+      - enable-linger
+      - "{{ ansible_facts.user_id }}"
+  changed_when: true
+  when: setup_podman_linger.stdout | trim != 'yes'
+
+- name: Discover the user's runtime directory from logind
+  ansible.builtin.command:
+    argv:
+      - loginctl
+      - show-user
+      - "{{ ansible_facts.user_uid | string }}"
+      - --property=RuntimePath
+      - --value
+  register: setup_podman_runtime_path
+  changed_when: false
+  check_mode: false
+  when: setup_podman_runtime_dir | length == 0
+
+- name: Use the discovered runtime directory
+  ansible.builtin.set_fact:
+    setup_podman_runtime_dir: "{{ setup_podman_runtime_path.stdout | trim }}"
+  when: setup_podman_runtime_dir | length == 0
+
+- name: Require an absolute user runtime directory
+  ansible.builtin.assert:
+    that:
+      - setup_podman_runtime_dir is match('^/')
+    fail_msg: The container host must have an active user session or lingering enabled.
+
+- name: Read Podman host information
+  ansible.builtin.command:
+    argv:
+      - podman
+      - info
+      - --format=json
+  environment: "{{ setup_podman_environment }}"
+  register: setup_podman_info
+  changed_when: false
+  check_mode: false
+
+- name: Require rootless Podman with Quadlet support
+  ansible.builtin.assert:
+    that:
+      - (setup_podman_info.stdout | from_json).host.security.rootless
+      - (setup_podman_info.stdout | from_json).host.cgroupsVersion == 'v2'
+      - (setup_podman_info.stdout | from_json).version.Version is version('5.0', '>=')
+    fail_msg: >-
+      This role requires rootless Podman 5 or newer and cgroup v2 inside the container host.
+      If the distribution supplies an older release, install a supported Podman package before rerunning.
+
+- name: Create the shared configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ setup_podman_data_dir }}"
+    - "{{ setup_podman_quadlet_dir }}"
+
+# Remove the old ingress before backends move from telemetry to podman-stack.
+# The shared removal path leaves Grafana and Loki volumes untouched.
+- name: Retire the legacy telemetry gateway
+  ansible.builtin.include_tasks: remove_container.yml
+  vars:
+    setup_podman_container_name: telemetry-gateway
+
+- name: Apply legacy gateway removal before configuring replacement services
+  ansible.builtin.meta: flush_handlers
+
+- name: Create the shared container network
+  containers.podman.podman_network:
+    name: podman-stack
+    state: present
+  environment: "{{ setup_podman_environment }}"

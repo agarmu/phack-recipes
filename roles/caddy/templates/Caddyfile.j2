@@ -1,0 +1,37 @@
+# {{ ansible_managed }}
+{
+	admin off
+	auto_https off
+}
+
+{% if monitoring_enabled %}
+http:// {
+	bind "unix//sockets/grafana.sock|{{ caddy_socket_mode }}"
+	reverse_proxy grafana:3000
+}
+
+http:// {
+	bind "unix//sockets/loki-ingest.sock|{{ caddy_socket_mode }}"
+	basic_auth {
+		otel {env.LOKI_OTEL_PASSWORD_HASH}
+	}
+	@ingest {
+		method POST
+		path /otlp/v1/logs
+	}
+	handle @ingest {
+		reverse_proxy loki:3100
+	}
+	handle {
+		respond "Not found" 404
+	}
+}
+
+http:// {
+	bind "unix//sockets/loki-admin.sock|{{ caddy_socket_mode }}"
+	basic_auth {
+		admin {env.LOKI_ADMIN_PASSWORD_HASH}
+	}
+	reverse_proxy loki:3100
+}
+{% endif %}
