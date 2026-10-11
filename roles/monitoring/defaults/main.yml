@@ -3,6 +3,8 @@ monitoring_enabled: true
 monitoring_data_dir: "{{ setup_podman_data_dir }}/monitoring"
 monitoring_grafana_image: docker.io/grafana/grafana:13.2.3
 monitoring_loki_image: docker.io/grafana/loki:3.7.8
+monitoring_prometheus_image: docker.io/prom/prometheus:v3.15.0
+monitoring_tempo_image: docker.io/grafana/tempo:3.1.0
 monitoring_grafana_admin_password: "{{ secret_grafana_admin_password | default('') }}"
 
 monitoring_grafana_datasources:
@@ -17,6 +19,18 @@ monitoring_grafana_datasources:
       editable: false
       jsonData:
         maxLines: 1000
+    - name: Prometheus
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      editable: false
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo:3200
+      editable: false
 
 monitoring_grafana_plugins:
   apiVersion: 1
@@ -32,6 +46,9 @@ monitoring_loki_config:
     http_listen_port: 3100
     grpc_listen_address: 127.0.0.1
     grpc_listen_port: 9096
+  # Single-process query callbacks must reach the loopback-only gRPC listener.
+  frontend:
+    address: 127.0.0.1
   common:
     path_prefix: /loki
     replication_factor: 1
@@ -81,3 +98,35 @@ monitoring_loki_config:
       kvstore:
         store: inmemory
       replication_factor: 1
+
+# Push-only metrics: CMS sends OTLP HTTP to
+# http://prometheus:9090/api/v1/otlp/v1/metrics on podman-stack.
+# The TSDB (including its WAL) lives in the preserved prometheus-data volume.
+# https://prometheus.io/docs/guides/opentelemetry/
+monitoring_prometheus_config:
+  scrape_configs: []
+
+# Single-binary Tempo needs no Kafka; only OTLP HTTP is exposed internally at
+# http://tempo:4318/v1/traces. Grafana queries its separate HTTP API on port 3200.
+# All trace blocks and WALs, including the live-store's default /var/tempo paths,
+# live in the preserved tempo-data volume.
+# https://github.com/grafana/tempo/blob/v3.1.0/example/docker-compose/single-binary/tempo.yaml
+monitoring_tempo_config:
+  server:
+    http_listen_address: 0.0.0.0
+    http_listen_port: 3200
+  distributor:
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+  storage:
+    trace:
+      backend: local
+      wal:
+        path: /var/tempo/wal
+      local:
+        path: /var/tempo/blocks
+  usage_report:
+    reporting_enabled: false

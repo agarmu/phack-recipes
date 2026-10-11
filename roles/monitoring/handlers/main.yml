@@ -7,6 +7,22 @@
   environment: "{{ setup_podman_environment }}"
   when: monitoring_enabled and not ansible_check_mode
 
+- name: Restart Prometheus
+  ansible.builtin.systemd_service:
+    name: prometheus.service
+    scope: user
+    state: restarted
+  environment: "{{ setup_podman_environment }}"
+  when: monitoring_enabled and not ansible_check_mode
+
+- name: Restart Tempo
+  ansible.builtin.systemd_service:
+    name: tempo.service
+    scope: user
+    state: restarted
+  environment: "{{ setup_podman_environment }}"
+  when: monitoring_enabled and not ansible_check_mode
+
 - name: Restart Grafana
   ansible.builtin.systemd_service:
     name: grafana.service

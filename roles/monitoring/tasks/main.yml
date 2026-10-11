@@ -28,6 +28,8 @@
       loop:
         - grafana-data
         - loki-data
+        - prometheus-data
+        - tempo-data
 
     - name: Generate Loki configuration
       ansible.builtin.copy:
@@ -35,6 +37,20 @@
         dest: "{{ monitoring_data_dir }}/loki.yaml"
         mode: "0644"
       notify: Restart Loki
+
+    - name: Generate Prometheus configuration
+      ansible.builtin.copy:
+        content: "{{ monitoring_prometheus_config | to_nice_yaml(indent=2, sort_keys=false) }}"
+        dest: "{{ monitoring_data_dir }}/prometheus.yaml"
+        mode: "0644"
+      notify: Restart Prometheus
+
+    - name: Generate Tempo configuration
+      ansible.builtin.copy:
+        content: "{{ monitoring_tempo_config | to_nice_yaml(indent=2, sort_keys=false) }}"
+        dest: "{{ monitoring_data_dir }}/tempo.yaml"
+        mode: "0644"
+      notify: Restart Tempo
 
     - name: Generate Grafana provisioning
       ansible.builtin.copy:
@@ -72,6 +88,36 @@
         - Reload user systemd
         - Restart Loki
 
+    - name: Define Prometheus
+      containers.podman.podman_container:
+        name: prometheus
+        image: "{{ monitoring_prometheus_image }}"
+        command:
+          - --config.file=/etc/prometheus/prometheus.yaml
+          - --storage.tsdb.path=/prometheus
+          - --web.listen-address=0.0.0.0:9090
+          - --web.enable-otlp-receiver
+        volume:
+          - prometheus-data:/prometheus:U
+          - "{{ monitoring_data_dir }}/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro,Z"
+      notify:
+        - Reload user systemd
+        - Restart Prometheus
+
+    - name: Define Tempo
+      containers.podman.podman_container:
+        name: tempo
+        image: "{{ monitoring_tempo_image }}"
+        command:
+          - -target=all
+          - -config.file=/etc/tempo/config.yaml
+        volume:
+          - tempo-data:/var/tempo:U
+          - "{{ monitoring_data_dir }}/tempo.yaml:/etc/tempo/config.yaml:ro,Z"
+      notify:
+        - Reload user systemd
+        - Restart Tempo
+
     - name: Define Grafana
       containers.podman.podman_container:
         name: grafana
@@ -104,6 +150,8 @@
         state: started
       loop:
         - loki
+        - prometheus
+        - tempo
         - grafana
       when: not ansible_check_mode
 
@@ -116,6 +164,8 @@
   loop:
     - grafana
     - loki
+    - prometheus
+    - tempo
   loop_control:
     loop_var: monitoring_container
   when: not monitoring_enabled
