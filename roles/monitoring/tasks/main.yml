@@ -95,7 +95,7 @@
         command:
           - --config.file=/etc/prometheus/prometheus.yaml
           - --storage.tsdb.path=/prometheus
-          - --web.listen-address=0.0.0.0:9090
+          - "--web.listen-address=0.0.0.0:{{ service_ports.prometheus }}"
           - --web.enable-otlp-receiver
         volume:
           - prometheus-data:/prometheus:U
@@ -123,6 +123,7 @@
         name: grafana
         image: "{{ monitoring_grafana_image }}"
         env:
+          GF_SERVER_HTTP_PORT: "{{ service_ports.grafana | string }}"
           GF_LOG_MODE: console
           GF_USERS_ALLOW_SIGN_UP: "false"
           GF_AUTH_ANONYMOUS_ENABLED: "false"
@@ -156,9 +157,7 @@
       when: not ansible_check_mode
 
 - name: Disable monitoring
-  ansible.builtin.include_role:
-    name: setup_podman
-    tasks_from: remove_container
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/roles/setup_podman/tasks/remove_container.yml"
   vars:
     setup_podman_container_name: "{{ monitoring_container }}"
   loop:

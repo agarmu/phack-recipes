@@ -7,7 +7,7 @@
 {% if monitoring_enabled %}
 http:// {
 	bind "unix//sockets/grafana.sock|{{ caddy_socket_mode }}"
-	reverse_proxy grafana:3000
+	reverse_proxy grafana:{{ service_ports.grafana }}
 }
 
 http:// {
@@ -20,7 +20,7 @@ http:// {
 		path /otlp/v1/logs
 	}
 	handle @ingest {
-		reverse_proxy loki:3100
+		reverse_proxy loki:{{ service_ports.loki }}
 	}
 	handle {
 		respond "Not found" 404
@@ -32,6 +32,15 @@ http:// {
 	basic_auth {
 		admin {env.LOKI_ADMIN_PASSWORD_HASH}
 	}
-	reverse_proxy loki:3100
+	reverse_proxy loki:{{ service_ports.loki }}
+}
+{% endif %}
+
+{% if cms_enabled %}
+http:// {
+	bind "unix//sockets/cms.sock|{{ caddy_socket_mode }}"
+	reverse_proxy cms:{{ service_ports.cms }} {
+		flush_interval -1
+	}
 }
 {% endif %}

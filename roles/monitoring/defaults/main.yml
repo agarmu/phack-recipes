@@ -14,7 +14,7 @@ monitoring_grafana_datasources:
       uid: loki
       type: loki
       access: proxy
-      url: http://loki:3100
+      url: "http://loki:{{ service_ports.loki }}"
       isDefault: true
       editable: false
       jsonData:
@@ -23,13 +23,13 @@ monitoring_grafana_datasources:
       uid: prometheus
       type: prometheus
       access: proxy
-      url: http://prometheus:9090
+      url: "http://prometheus:{{ service_ports.prometheus }}"
       editable: false
     - name: Tempo
       uid: tempo
       type: tempo
       access: proxy
-      url: http://tempo:3200
+      url: "http://tempo:{{ service_ports.tempo }}"
       editable: false
 
 monitoring_grafana_plugins:
@@ -43,9 +43,9 @@ monitoring_loki_config:
   auth_enabled: false
   server:
     http_listen_address: 0.0.0.0
-    http_listen_port: 3100
+    http_listen_port: "{{ service_ports.loki }}"
     grpc_listen_address: 127.0.0.1
-    grpc_listen_port: 9096
+    grpc_listen_port: "{{ service_ports.loki_grpc }}"
   # Single-process query callbacks must reach the loopback-only gRPC listener.
   frontend:
     address: 127.0.0.1
@@ -99,28 +99,20 @@ monitoring_loki_config:
         store: inmemory
       replication_factor: 1
 
-# Push-only metrics: CMS sends OTLP HTTP to
-# http://prometheus:9090/api/v1/otlp/v1/metrics on podman-stack.
-# The TSDB (including its WAL) lives in the preserved prometheus-data volume.
-# https://prometheus.io/docs/guides/opentelemetry/
 monitoring_prometheus_config:
   scrape_configs: []
 
-# Single-binary Tempo needs no Kafka; only OTLP HTTP is exposed internally at
-# http://tempo:4318/v1/traces. Grafana queries its separate HTTP API on port 3200.
-# All trace blocks and WALs, including the live-store's default /var/tempo paths,
-# live in the preserved tempo-data volume.
-# https://github.com/grafana/tempo/blob/v3.1.0/example/docker-compose/single-binary/tempo.yaml
 monitoring_tempo_config:
   server:
     http_listen_address: 0.0.0.0
-    http_listen_port: 3200
+    http_listen_port: "{{ service_ports.tempo }}"
+    grpc_listen_port: "{{ service_ports.tempo_grpc }}"
   distributor:
     receivers:
       otlp:
         protocols:
           http:
-            endpoint: 0.0.0.0:4318
+            endpoint: "0.0.0.0:{{ service_ports.tempo_otlp }}"
   storage:
     trace:
       backend: local

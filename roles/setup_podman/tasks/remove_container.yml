@@ -1,4 +1,5 @@
 ---
+# Use include_tasks to preserve reload-before-restart handler ordering.
 - name: Check for the managed Quadlet
   ansible.builtin.stat:
     path: "{{ setup_podman_quadlet_dir }}/{{ setup_podman_container_name }}.container"

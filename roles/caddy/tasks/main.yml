@@ -70,6 +70,7 @@
           - grafana.sock
           - loki-ingest.sock
           - loki-admin.sock
+          - cms.sock
         file_type: any
       register: caddy_existing_sockets
 
@@ -123,9 +124,7 @@
       when: not ansible_check_mode
 
 - name: Disable Caddy
-  ansible.builtin.include_role:
-    name: setup_podman
-    tasks_from: remove_container
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/roles/setup_podman/tasks/remove_container.yml"
   vars:
     setup_podman_container_name: caddy
   when: not caddy_enabled

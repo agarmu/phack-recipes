@@ -1,0 +1,9 @@
+{% macro value(item) -%}
+{%- if item is mapping -%}
+{ {% for key, child in item.items() %}{{ key | to_json(ensure_ascii=false) }} = {{ value(child) }}{% if not loop.last %}, {% endif %}{% endfor %} }
+{%- elif item is sequence and item is not string -%}
+[ {% for child in item %}{{ value(child) }}{% if not loop.last %}, {% endif %}{% endfor %} ]
+{%- else -%}
+{{ item | to_json(ensure_ascii=false) }}
+{%- endif -%}
+{%- endmacro %}

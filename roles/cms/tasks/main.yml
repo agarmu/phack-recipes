@@ -1,0 +1,196 @@
+---
+- name: Configure CMS
+  when: cms_enabled
+  module_defaults:
+    containers.podman.podman_container: "{{ setup_podman_container_defaults }}"
+  block:
+    - name: Require monitoring for all CMS telemetry signals
+      ansible.builtin.assert:
+        that:
+          - monitoring_enabled | bool
+        fail_msg: Enable monitoring_enabled before enabling CMS.
+
+    - name: Require a published CMS image and external OAuth settings
+      ansible.builtin.assert:
+        that:
+          - cms_image | length > 0
+          - service_ports.cms is integer
+          - service_ports.cms > 0 and service_ports.cms <= 65535
+          - cms_effective_config.serve.baseUrl is match('^https://[^/?#]+/?$')
+          - not (cms_effective_config.serve.bindLocal | default(false))
+          - cms_effective_config.serve.unix is not defined
+          - cms_effective_config.auth.kind == 'rfc-9068'
+          - cms_effective_config.auth.algorithm == 'ES256'
+          - cms_effective_config.auth.issuer | length > 0
+          - cms_effective_config.auth.jwksUrl | length > 0
+          - cms_effective_config.auth.allowedSubjects | length > 0
+          - cms_effective_config.storage.backend != 'local' or cms_effective_config.storage.directory is match('^/data/')
+          - "'..' not in cms_effective_config.storage.directory.split('/') if cms_effective_config.storage.backend == 'local' else true"
+        fail_msg: >-
+          Configure service_ports, cms_config and secret_cms_config before enabling CMS.
+          CMS must listen on all interfaces; local storage must be under /data.
+      no_log: true
+
+    - name: Require the managed database password
+      ansible.builtin.assert:
+        that:
+          - secret_cms.database.password is string
+          - secret_cms.database.password | length > 0
+          - "'\n' not in secret_cms.database.password"
+          - "'\r' not in secret_cms.database.password"
+        quiet: true
+      no_log: true
+
+    - name: Require S3 credentials when S3 storage is selected
+      ansible.builtin.assert:
+        that:
+          - secret_cms.storage.accessKeyId is string
+          - secret_cms.storage.accessKeyId | length > 0
+          - secret_cms.storage.secretAccessKey is string
+          - secret_cms.storage.secretAccessKey | length > 0
+        quiet: true
+      no_log: true
+      when: cms_effective_config.storage.backend == 's3'
+
+    - name: Create the CMS configuration directory
+      ansible.builtin.file:
+        path: "{{ cms_data_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Preserve CMS PostgreSQL storage
+      containers.podman.podman_volume:
+        name: cms-postgres-data
+        state: present
+
+    - name: Write the PostgreSQL initialization and readiness password
+      ansible.builtin.copy:
+        content: "{{ secret_cms.database.password }}"
+        dest: "{{ cms_data_dir }}/postgres-password"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify:
+        - Stop CMS before PostgreSQL restart
+        - Restart CMS PostgreSQL
+        - Restart CMS
+
+    - name: Install PostgreSQL initialization and readiness scripts
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ cms_data_dir }}/{{ item }}"
+        mode: "0600"
+      loop:
+        - postgres-init.sql
+        - postgres-healthcheck.sh
+      notify:
+        - Stop CMS before PostgreSQL restart
+        - Restart CMS PostgreSQL
+        - Restart CMS
+
+    - name: Define CMS PostgreSQL
+      containers.podman.podman_container:
+        name: cms-postgres
+        image: "{{ cms_postgres_image }}"
+        userns: keep-id:uid=999,gid=999
+        user: "999:999"
+        command:
+          - postgres
+          - -p
+          - "{{ service_ports.postgres | string }}"
+        env:
+          PGPORT: "{{ service_ports.postgres | string }}"
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD_FILE: /run/cms-postgres-password
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+        volume:
+          - cms-postgres-data:/var/lib/postgresql/data:U
+          - "{{ cms_data_dir }}/postgres-password:/run/cms-postgres-password:ro,Z"
+          - "{{ cms_data_dir }}/postgres-init.sql:/docker-entrypoint-initdb.d/10-cms.sql:ro,Z"
+          - "{{ cms_data_dir }}/postgres-healthcheck.sh:/usr/local/bin/postgres-healthcheck.sh:ro,Z"
+        healthcheck: bash /usr/local/bin/postgres-healthcheck.sh
+        healthcheck_interval: 5s
+        healthcheck_timeout: 5s
+        sdnotify: healthy
+        stop_timeout: 60
+      notify:
+        - Reload user systemd
+        - Stop CMS before PostgreSQL restart
+        - Restart CMS PostgreSQL
+        - Restart CMS
+
+    - name: Preserve CMS image storage
+      containers.podman.podman_volume:
+        name: cms-data
+        state: present
+      when: cms_effective_config.storage.backend == 'local'
+
+    - name: Render CMS settings including private provider URLs
+      ansible.builtin.template:
+        src: config.toml.j2
+        dest: "{{ cms_data_dir }}/config.toml"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify: Restart CMS
+
+    - name: Render CMS private configuration
+      ansible.builtin.template:
+        src: secrets.toml.j2
+        dest: "{{ cms_data_dir }}/secrets.toml"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify: Restart CMS
+
+    - name: Define CMS
+      containers.podman.podman_container:
+        name: cms
+        image: "{{ cms_image }}"
+        workdir: /app
+        # keep-id lets the container read host-owned 0600 files.
+        userns: keep-id:uid=1000,gid=1000
+        user: "1000:1000"
+        volume: >-
+          {{ (['cms-data:/data:U'] if cms_effective_config.storage.backend == 'local' else [])
+             + [cms_data_dir ~ '/config.toml:/app/config.toml:ro,Z',
+                cms_data_dir ~ '/secrets.toml:/app/secrets.toml:ro,Z'] }}
+        quadlet_options: >-
+          {{ setup_podman_container_defaults.quadlet_options + [
+            '[Unit]\nRequires=cms-postgres.service\nAfter=cms-postgres.service'
+          ] }}
+      notify:
+        - Reload user systemd
+        - Restart CMS
+
+    - name: Apply CMS changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Start CMS PostgreSQL and wait for authenticated readiness
+      ansible.builtin.systemd_service:
+        name: cms-postgres.service
+        scope: user
+        state: started
+      environment: "{{ setup_podman_environment }}"
+      when: not ansible_check_mode
+
+    - name: Start CMS
+      ansible.builtin.systemd_service:
+        name: cms.service
+        scope: user
+        state: started
+      environment: "{{ setup_podman_environment }}"
+      when: not ansible_check_mode
+
+- name: Disable CMS before PostgreSQL and preserve all data volumes
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/roles/setup_podman/tasks/remove_container.yml"
+  vars:
+    setup_podman_container_name: "{{ cms_container_to_remove }}"
+  loop:
+    - cms
+    - cms-postgres
+  loop_control:
+    loop_var: cms_container_to_remove
+  when: not cms_enabled

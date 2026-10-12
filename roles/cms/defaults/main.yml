@@ -1,0 +1,8 @@
+---
+cms_enabled: false
+cms_data_dir: "{{ setup_podman_data_dir }}/cms"
+cms_image: ghcr.io/agarmu/cms:v0.1.2
+# Major PostgreSQL upgrades require a data migration.
+cms_postgres_image: docker.io/library/postgres:17.11-bookworm
+cms_config: {}
+cms_effective_config: "{{ cms_config | combine(secret_cms_config | default({}), recursive=true) }}"

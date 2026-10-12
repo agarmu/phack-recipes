@@ -25,9 +25,14 @@
       environment: "{{ setup_podman_environment }}"
       tags:
         - monitoring
+    - role: cms
+      environment: "{{ setup_podman_environment }}"
+      tags:
+        - cms
     - role: caddy
       environment: "{{ setup_podman_environment }}"
       tags:
         - caddy
         # Refresh proxy routes when a backend is enabled or disabled.
         - monitoring
+        - cms

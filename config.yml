@@ -1,4 +1,27 @@
 ---
-# Deployment switches; all other settings default in roles/*/defaults/main.yml.
+# Public deployment settings.
 monitoring_enabled: true
 caddy_enabled: true
+cms_enabled: false
+
+service_ports:
+  grafana: 3000
+  loki: 3100
+  loki_grpc: 9096
+  prometheus: 9090
+  tempo: 3200
+  tempo_grpc: 9095
+  tempo_otlp: 4318
+  cms: 3000
+  postgres: 5432
+
+cms_config:
+  serve:
+    baseUrl: ''
+  auth:
+    kind: rfc-9068
+    algorithm: ES256
+  storage:
+    backend: s3
+  mcp:
+    enabled: true
